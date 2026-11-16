@@ -11,9 +11,13 @@ MIT 开源插件。为 DeepSeek Harness 提供可拖动的 2D 比赛小窗、比
 
 已在 Windows 的 DSH 0.2.2-rc.1 验证安装、挂载、合成回放和停用后重新启用；真实直播切换仍待有赛事时补验。尚未建立最低 DSH 版本兼容矩阵。
 
-## 构建与安装
+## 安装
 
-从项目根目录执行：
+普通用户从 [GitHub Release](https://github.com/KhalilWong/dsh-plugin-touchline-football/releases/tag/v0.8.0) 下载 `dsh-plugin-touchline-0.8.0.tgz`，在 DSH“插件 → 添加插件 → 安装第三方插件”中输入文件绝对路径并启用。无需构建源码。DSH Market 尚未收录。
+
+## 从源码构建
+
+开发者从项目根目录执行：
 
 ```sh
 npm ci
