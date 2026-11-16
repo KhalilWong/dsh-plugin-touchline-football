@@ -1,0 +1,43 @@
+{
+  "name": "dsh-plugin-touchline",
+  "version": "0.8.0",
+  "private": true,
+  "type": "module",
+  "description": "Touchline — a draggable floating window that draws the live 2D football pitch while you work in DSH. Pluggable data sources; no bundled match data.",
+  "license": "MIT",
+  "icon": "icon.svg",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "host/**/*.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KhalilWong/dsh-plugin-touchline-football.git",
+    "directory": "plugin"
+  },
+  "homepage": "https://github.com/KhalilWong/dsh-plugin-touchline-football",
+  "bugs": {
+    "url": "https://github.com/KhalilWong/dsh-plugin-touchline-football/issues"
+  }
+}

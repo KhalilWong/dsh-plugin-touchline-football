@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Touchline Match Window",
+    "description": "A draggable floating window that draws the live 2D football pitch in the corner: resize, collapse and switch between live matches without touching the rest of the DSH window."
+  }
+}

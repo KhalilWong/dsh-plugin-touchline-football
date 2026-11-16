@@ -1,0 +1,7 @@
+# Touchline bundle patch: inserts one dual-face row. The node half (exports ".")
+# serves the ESPN proxy routes; the `dsh.client` declaration in package.json makes
+# the browser half (exports "./client") load in the Web GUI, where it registers a
+# floating overlay and composer status pill.
+- insert:
+    - id: web-ui-touchline
+      name: dsh-plugin-touchline
