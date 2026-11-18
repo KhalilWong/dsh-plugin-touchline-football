@@ -2,7 +2,7 @@
 
 **在 DeepSeek Harness（DSH）中查看足球比分、比赛事件和 2D 球场，支持本地追踪回放。**
 
-[下载 0.8.2 预发布](https://github.com/KhalilWong/dsh-plugin-touchline-football/releases/tag/v0.8.2) · [配置说明](plugin/README.md) · [反馈问题](https://github.com/KhalilWong/dsh-plugin-touchline-football/issues) · [更新记录](CHANGELOG.md)
+[下载 0.8.3 预发布](https://github.com/KhalilWong/dsh-plugin-touchline-football/releases/tag/v0.8.3) · [配置说明](plugin/README.md) · [反馈问题](https://github.com/KhalilWong/dsh-plugin-touchline-football/issues) · [更新记录](CHANGELOG.md)
 
 > 当前为预发布。直播球场根据阵型和事件推演，不是真实连续球员追踪；真实赛事的端到端延迟仍待验收。
 
@@ -17,13 +17,13 @@
 
 已在 **Windows / DSH 0.2.2-rc.1** 验证。其他宿主版本尚未建立兼容矩阵。
 
-1. 从 [Release](https://github.com/KhalilWong/dsh-plugin-touchline-football/releases/tag/v0.8.2) 下载 **`dsh-plugin-touchline-0.8.2.tgz`**。请选择这个安装包，GitHub 自动生成的 Source code 归档用于开发。
+1. 从 [Release](https://github.com/KhalilWong/dsh-plugin-touchline-football/releases/tag/v0.8.3) 下载 **`dsh-plugin-touchline-0.8.3.tgz`**。请选择这个安装包，GitHub 自动生成的 Source code 归档用于开发。
 2. 在 DSH 打开“插件 → 添加插件 → 安装第三方插件”，输入下载文件的**绝对路径**并安装。
 3. 启用插件，返回会话页面，在输入区的比分胶囊中选择直播或回放。若界面未更新，刷新 Web GUI；更新宿主代码后可能需要重载插件或重启 DSH。
 
-普通用户无需克隆仓库或执行构建命令。可用 Release 中的 `SHA256SUMS-0.8.2.txt` 校验下载文件。
+普通用户无需克隆仓库或执行构建命令。可用 Release 中的 `SHA256SUMS-0.8.3.txt` 校验下载文件。
 
-**DSH Market 已收录**，可搜索 `touchline`。Market 完整目录支持 GitHub 安装包；DSH 原生“发现”页的 `index.json` 仅收 npm 包，不包含本插件。公开名称为 Touchline Football，内部包名保留 `dsh-plugin-touchline`，兼容已有安装和配置。
+**精选目录已收录，但 DSH 原生「插件 → 发现」仍待索引同步。** [npm 包 `dsh-plugin-touchline@0.8.3`](https://www.npmjs.com/package/dsh-plugin-touchline/v/0.8.3) 已发布，正在通过[市场更新申请](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/16580)推进同步。在原生市场能搜索到之前，可使用上面的 GitHub Release 安装。公开名称为 Touchline Football，内部包名保留 `dsh-plugin-touchline`，兼容已有安装和配置。
 
 ## 没有直播时如何体验
 
