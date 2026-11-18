@@ -1,9 +1,8 @@
 {
   "name": "dsh-plugin-touchline",
-  "version": "0.8.2",
-  "private": true,
+  "version": "0.8.3",
   "type": "module",
-  "description": "Touchline — a draggable floating window that draws the live 2D football pitch while you work in DSH. Pluggable data sources; no bundled match data.",
+  "description": "Touchline Football: floating football scores, event-based pitch visualization and local tracking replay for DSH. No bundled match data.",
   "license": "MIT",
   "icon": "icon.svg",
   "exports": {
