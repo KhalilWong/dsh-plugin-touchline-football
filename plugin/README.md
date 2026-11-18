@@ -13,7 +13,7 @@ MIT 开源插件。为 DeepSeek Harness 提供可拖动的 2D 比赛小窗、比
 
 ## 安装
 
-普通用户从 [GitHub Release](https://github.com/KhalilWong/dsh-plugin-touchline-football/releases/tag/v0.8.0) 下载 `dsh-plugin-touchline-0.8.0.tgz`，在 DSH“插件 → 添加插件 → 安装第三方插件”中输入文件绝对路径并启用。无需构建源码。DSH Market 尚未收录。
+普通用户从 [GitHub Release](https://github.com/KhalilWong/dsh-plugin-touchline-football/releases/tag/v0.8.2) 下载 `dsh-plugin-touchline-0.8.2.tgz`，在 DSH“插件 → 添加插件 → 安装第三方插件”中输入文件绝对路径并启用。无需构建源码。DSH Market 已收录；搜索 `touchline`，目录安装版本可能暂时落后于 GitHub Release。
 
 ## 从源码构建
 
@@ -62,3 +62,5 @@ npm run plugin:pack
 直播正常轮询目标为 5 秒（不含上游自身延迟），失败时退避；底部显示事件推演与同步状态。无新坐标时停留在最后事件位置，球员保持有限的阵型调整。画面不是连续真实追踪；不能用这次同步优化承诺电视直播级实时性。
 
 直播使用 ESPN 公开接口，球员位置由事件和阵型推演，不是实时光学追踪。MIT 许可覆盖本项目代码，不授予第三方赛事数据使用权。上游接口可能变化；发布包不包含赛事数据、下载样本或队徽文件。
+
+0.8.2 的 HTTP 路由要求宿主提供 `connection.admit()`，缺失时拒绝访问。

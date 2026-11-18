@@ -13,19 +13,19 @@ const bundle = await build({
       'export const getSource=()=>globalThis.source; export const listSources=()=>[globalThis.source];' }));
   } }],
 });
-function setup(loader) {
+function setup(loader, admit = () => ({ peer: { principal: { kind: 'owner' } } })) {
   const source = { id: 'test', capabilities: { coordinates: true }, getScoreboard: loader };
   const sandbox = vm.createContext({ module: { exports: {} }, require: createRequire(import.meta.url), source, console, URL, Buffer });
   vm.runInContext(bundle.outputFiles[0].text, sandbox);
   return () => {
     const routes = new Map(); const effects = [];
-    sandbox.module.exports.apply({ webServer: { register(route) {
+    sandbox.module.exports.apply({ connection: { admit }, webServer: { register(route) {
       assert.ok(!routes.has(route.path)); routes.set(route.path, route.handler);
       return () => routes.delete(route.path);
     } }, effect(fn) { effects.push(fn()); } });
     return { routes, dispose() { effects.splice(0).forEach(fn => fn()); }, async get(name) {
       let status, body;
-      await routes.get('/api/touchline/' + name)({ url: '/api/touchline/' + name + '?date=20261110' }, {
+      await routes.get('/api/touchline/' + name)({ method: 'GET', url: '/api/touchline/' + name + '?date=20261110' }, {
         writeHead(code) { status = code; }, end(text) { body = JSON.parse(text); },
       });
       return { status, body };
@@ -66,4 +66,15 @@ test('concurrent live and scoreboard requests share one upstream read', async ()
   assert.equal(calls, 1); finish(board('shared'));
   assert.equal((await live).body.matches.length, 1);
   assert.equal((await scoreboard).body.matches.length, 2); host.dispose();
+});
+
+
+test('all HTTP routes fail closed before accessing provider or local replay data', async () => {
+  for (const admit of [()=>({rejection:401}),()=>({rejection:403}),()=>({peer:{principal:{kind:'guest'}}}),()=>undefined,()=>{throw Error('unavailable')}]) {
+    let calls=0;const host=setup(async()=>{calls++;return board('secret')},admit)();
+    for(const name of ['health','sources','live','scoreboard','match','replays','replay']) {
+      const response=await host.get(name);assert.ok([401,403].includes(response.status));assert.equal(Object.keys(response.body).join(','),'error');
+    }
+    assert.equal(calls,0);host.dispose();
+  }
 });

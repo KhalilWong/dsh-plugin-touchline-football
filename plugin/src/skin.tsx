@@ -397,6 +397,7 @@ function keyMoments(match: MatchResponse | null): KeyMoment[] {
   const seen = new Set<string>();
   let home = 0;
   let away = 0;
+  const playsById = new Map((match.plays ?? []).map(play => [play.id, play]));
 
   for (const { event } of ordered) {
     const kind = momentKind(event);
@@ -412,8 +413,14 @@ function keyMoments(match: MatchResponse | null): KeyMoment[] {
     seen.add(fingerprint);
 
     if (scoring && event.goal) {
+      const reported = playsById.get(event.id);
+      if (reported && typeof reported.homeScore === 'number' && Number.isFinite(reported.homeScore)
+        && typeof reported.awayScore === 'number' && Number.isFinite(reported.awayScore)) {
+        home = reported.homeScore;
+        away = reported.awayScore;
+      } else {
       const side =
-        kind === 'own'
+        kind === 'own' && match.source?.provider !== 'ESPN'
           ? event.teamId === match.home.id
             ? 'away'
             : 'home'
@@ -422,6 +429,7 @@ function keyMoments(match: MatchResponse | null): KeyMoment[] {
             : 'away';
       if (side === 'home') home += 1;
       else away += 1;
+      }
     }
 
     rows.push({

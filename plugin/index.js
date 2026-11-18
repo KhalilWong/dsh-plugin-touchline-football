@@ -29,7 +29,7 @@ import { getSource, listSources } from './host/sources/index.js';
 export const API_PREFIX = '/api/touchline';
 
 /** Dependency: the plugin is inert wherever no web server is composed. */
-export const inject = ['webServer'];
+export const inject = ['webServer', 'connection'];
 
 const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -284,7 +284,6 @@ export function apply(ctx, config = {}) {
           service: 'touchline',
           source: source.id,
           capabilities: source.capabilities ?? { coordinates: false },
-          replays: replayDir,
           time: new Date().toISOString(),
         });
       },
@@ -298,7 +297,21 @@ export function apply(ctx, config = {}) {
   ];
 
   ctx.effect(() => {
-    const disposers = routes.map((route) => ctx.webServer.register(route));
+    const disposers = routes.map((route) => ctx.webServer.register({
+      ...route,
+      handler: (req, res) => {
+        // Exact routes bypass the host's /api prefix handler. Apply its trust
+        // and authentication fence explicitly, before file or upstream access.
+        let admission;
+        try { admission = ctx.connection?.admit?.(req); } catch { /* fail closed */ }
+        if (!admission || 'rejection' in admission || admission.peer?.principal?.kind !== 'owner') {
+          const status = admission?.rejection === 401 ? 401 : 403;
+          return sendJson(res, status, { error: status === 401 ? 'unauthorized' : 'forbidden' });
+        }
+        if (req.method !== 'GET') return sendJson(res, 405, { error: 'method not allowed' });
+        return route.handler(req, res);
+      },
+    }));
     return () => {
       requestCache.dispose();
       for (const dispose of disposers.splice(0)) dispose();

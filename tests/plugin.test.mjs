@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
 const result = await build({
-  stdin: { contents: readFileSync('plugin/src/skin.tsx', 'utf8') + '\nexport { LiveFeed, view, playback, createReplayMatch };',
+  stdin: { contents: readFileSync('plugin/src/skin.tsx', 'utf8') + '\nexport { LiveFeed, view, playback, createReplayMatch, keyMoments };',
     resolveDir: fileURLToPath(new URL('../plugin/src/', import.meta.url)), loader: 'tsx' },
   bundle: true, write: false, format: 'cjs', platform: 'node',
   loader: { '.css': 'text' }, external: ['react', 'react/jsx-runtime'],
@@ -96,4 +96,17 @@ test('failed event refresh preserves last known positions and reports degradatio
  const s=setup();s.feed.select('123456');const m=s.createReplayMatch({...fixture,id:'123456'});m.plays=[{id:'p',totalClock:10,period:1,type:'pass',x:20,y:30,x2:null,y2:null}];
  s.requests[0].reply(m);await flush();[...s.timers.values()][0]();s.requests[1].reply({...m,plays:[],playsError:'timeout'});await flush();
  assert.equal(s.view.match.plays.length,1);assert.match(s.view.error,/事件数据/);s.feed.dispose();
+});
+
+
+test('own-goal log uses reported score and ESPN beneficiary without reversing twice', () => {
+  const {keyMoments}=setup();
+  const goals=Array.from({length:7},(_,i)=>({id:String(i),totalClock:i*60,displayClock:String(i+1),type:i===6?'own-goal':'goal',typeText:i===6?'Own Goal':'Goal',goal:true,teamId:'a',playerName:'Player '+i}));
+  const match={home:{id:'h'},away:{id:'a'},source:{provider:'ESPN'},timeline:goals,plays:[]};
+  assert.equal(keyMoments(match).at(-1).score.home,0);
+  assert.equal(keyMoments(match).at(-1).score.away,7);
+  match.timeline=[goals[6]];
+  match.plays=[{id:'6',homeScore:0,awayScore:7}];
+  assert.equal(keyMoments(match).at(-1).score.away,7);
+  assert.equal(keyMoments(match).at(-1).score.home,0);
 });
