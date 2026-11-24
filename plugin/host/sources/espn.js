@@ -293,8 +293,8 @@ function normalizePlay(play, index) {
     ownGoal: Boolean(play.ownGoal) || typeKey === 'own-goal',
     shootout: Boolean(play.shootout),
     wallclock: play.wallclock || null,
-    homeScore: Number.isFinite(Number(play.homeScore)) ? Number(play.homeScore) : null,
-    awayScore: Number.isFinite(Number(play.awayScore)) ? Number(play.awayScore) : null,
+    homeScore: play.homeScore != null && String(play.homeScore).trim() !== '' && Number.isFinite(Number(play.homeScore)) ? Number(play.homeScore) : null,
+    awayScore: play.awayScore != null && String(play.awayScore).trim() !== '' && Number.isFinite(Number(play.awayScore)) ? Number(play.awayScore) : null,
   };
 }
 
@@ -496,6 +496,34 @@ function scoreLabel(status) {
   return status.displayClock || 'LIVE';
 }
 
+// ESPN reports both teams' actions towards x=100. Keep one pitch frame:
+// home attacks right, away attacks left, including after half-time.
+function orientPlay(play, awayId) {
+  if (!awayId || play.teamId !== awayId) return play;
+  const result = { ...play };
+  for (const axis of ['x', 'y', 'x2', 'y2']) {
+    if (Number.isFinite(result[axis])) result[axis] = 100 - result[axis];
+  }
+  return result;
+}
+
+function markRestarts(plays) {
+  let goal = null;
+  for (const play of plays) {
+    if (goal && play.period !== goal.period) goal = null;
+    if (play.goal) { goal = play; continue; }
+    if (!goal) continue;
+    // Some feeds omit a separate kick-off event. Only classify the first
+    // subsequent on-ball action when it is the other team's centre pass.
+    if (Number.isFinite(play.x) && Number.isFinite(play.y)) {
+      if (play.type === 'pass' && play.teamId && goal.teamId && play.teamId !== goal.teamId &&
+          play.totalClock > goal.totalClock && play.totalClock - goal.totalClock <= 300 &&
+          Math.hypot(play.x - 50, play.y - 50) <= 3) play.restart = 'kickoff-after-goal';
+      goal = null;
+    } else if (/kick[ -]?off|^pass$|end-|start-/i.test(play.type)) goal = null;
+  }
+}
+
 export async function getMatch(eventId) {
   const summaryUrl = `${ESPN_SITE}/all/summary?event=${encodeURIComponent(eventId)}`;
   const summary = await fetchJson(summaryUrl, { timeout: 8000, retries: 0 });
@@ -525,11 +553,12 @@ export async function getMatch(eventId) {
         );
         for (const page of remaining) items.push(...(page.items || []));
       }
-      plays = items.map(normalizePlay);
+      plays = items.map(normalizePlay).map(play => orientPlay(play, away.id));
       plays.sort((a, b) => a.totalClock - b.totalClock || a.order - b.order);
       plays.forEach((play, index) => {
         play.order = index;
       });
+      markRestarts(plays);
     } catch (error) {
       playsError = error.message || 'play-by-play unavailable';
     }
@@ -541,8 +570,8 @@ export async function getMatch(eventId) {
   const homeLineup = homeRoster?.roster?.length ? normalizeRoster(homeRoster, home) : syntheticLineup(home, 'home');
   const awayLineup = awayRoster?.roster?.length ? normalizeRoster(awayRoster, away) : syntheticLineup(away, 'away');
 
-  const keyEvents = (summary?.keyEvents || []).map(normalizeKeyEvent);
-  const detailEvents = (competition.details || []).map(normalizeDetail);
+  const keyEvents = (summary?.keyEvents || []).map(normalizeKeyEvent).map(play => orientPlay(play, away.id));
+  const detailEvents = (competition.details || []).map(normalizeDetail).map(play => orientPlay(play, away.id));
   const timeline = [...keyEvents];
   const timelineKeys = new Set(
     timeline.map((e) => `${e.typeText}|${e.totalClock}|${e.playerName}|${e.teamId}`),
@@ -607,6 +636,7 @@ export async function getMatch(eventId) {
     playsError,
     source: {
       provider: 'ESPN',
+      coordinateSystem: 'home-attacks-right',
       summaryUrl,
       fetchedAt: new Date().toISOString(),
       playByPlay: plays.length > 0,

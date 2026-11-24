@@ -41,6 +41,29 @@ interface BallState {
 
 const HOME_GOAL_X = 4.2;
 const AWAY_GOAL_X = 95.8;
+const isStoppage = (play: Play) => /foul|offside|ball[ -]?out|out of play|injury|yellow[ -]?card|red[ -]?card/i.test(play.type);
+const isKickoff = (play: Play) => play.restart === 'kickoff-after-goal' || /kick[ -]?off/i.test(play.type);
+const fadeSeconds = 0.16;
+
+function reportedClock(label: string | undefined, seconds: number) {
+  if (label && /^\d/.test(label) && /[1-9]/.test(label)) return label;
+  return Number.isFinite(seconds) && seconds >= 60 ? `${Math.floor(seconds / 60)}'` : '';
+}
+
+function endEventClock(match: MatchResponse) {
+  let period = match.status.period;
+  let end: Pick<Play, 'period' | 'totalClock' | 'displayClock'> | undefined;
+  for (const events of [match.plays, match.timeline]) {
+    for (const event of events) {
+      period = Math.max(period, event.period);
+      if (/^(end-regular-time|end-extra-time|end-overtime|end-match|full-time)$/.test(event.type) &&
+          (!end || event.period > end.period || (event.period === end.period && event.totalClock > end.totalClock))) {
+        end = event;
+      }
+    }
+  }
+  return end && end.period === period ? reportedClock(end.displayClock, end.totalClock) : '';
+}
 
 export class MatchEngine {
   match: MatchResponse | null = null;
@@ -52,6 +75,9 @@ export class MatchEngine {
   playing = false;
   liveDelay = 0;
   private liveEventKey = "";
+  private relocating = false;
+  private ballOpacity = 1;
+  private latestReport: Play | undefined;
   ball: BallState = { pos: { x: 50, y: 50 }, target: { x: 50, y: 50 }, trail: [], lastTrailAt: 0 };
   activeEvent: Play | null = null;
   lastEvent: Play | null = null;
@@ -66,19 +92,34 @@ export class MatchEngine {
   private lastGoalId = '';
   private flashUntil = 0;
   private rafClock = 0;
+  private lastLiveClock = '';
+  private finalClock = '';
 
-  setMatch(match: MatchResponse) {
+  setMatch(match: MatchResponse, followLive = false) {
     const isNew = !this.match || this.match.id !== match.id;
     const oldMode = this.mode;
     const previousPeriod = this.match?.status.period;
+    if (isNew) {
+      this.lastLiveClock = '';
+      this.finalClock = '';
+    }
+    const clock = reportedClock(match.status.displayClock, match.status.clock);
+    if (match.status.state === 'in' && clock) this.lastLiveClock = clock;
+    if (match.status.state === 'post') {
+      this.finalClock = clock || endEventClock(match) || this.finalClock;
+    }
     this.match = match;
     this.buildTrack();
     if (isNew) {
+      this.relocating = false;
+      this.ballOpacity = 1;
+      this.flash = null;
+      this.lastGoalId = '';
       this.tracking = false;
       this.buildPlayers();
-      this.mode = match.status.state === 'in' ? 'live' : match.status.state === 'post' ? 'replay' : 'pre';
+      this.mode = followLive || match.status.state === 'in' ? 'live' : match.status.state === 'post' ? 'replay' : 'pre';
       this.speed = this.mode === 'replay' ? 8 : 1;
-      this.playing = this.mode !== 'pre';
+      this.playing = this.mode !== 'pre' && !(followLive && match.status.state === 'post');
       this.sim = this.mode === 'live' ? this.liveTarget() : 0;
       this.ball.trail = [];
       this.updateWorld(0.016, true);
@@ -93,12 +134,16 @@ export class MatchEngine {
         }
         // Repeated snapshots retain the event cursor; only a new event reanchors it.
       } else if (match.status.state === 'post' && oldMode === 'live') {
-        this.mode = 'replay';
+        if (!followLive) this.mode = 'replay';
         this.playing = false;
       }
       const latest = this.track.at(-1);
       const key = latest ? `${latest.period}:${latest.id}:${latest.t}` : '';
       if (this.mode === 'live' && key !== this.liveEventKey && latest) {
+        // A gap between reported actions has no observed ball trajectory.
+        this.relocating = !this.liveEventKey || this.lastEvent?.period !== latest.period ||
+          dist(this.ball.pos, { x: latest.x!, y: latest.y! }) > 18;
+        if (!this.liveEventKey) this.ballOpacity = 0;
         this.sim = latest.t; // Event cursor is independent of the display clock.
         this.ball.trail = [];
       }
@@ -149,6 +194,14 @@ export class MatchEngine {
 
   private buildTrack() {
     if (!this.match) return;
+    this.latestReport = undefined;
+    for (const play of this.match.plays) {
+      const previous = this.latestReport;
+      if (!previous || play.period > previous.period || (play.period === previous.period &&
+          (play.totalClock > previous.totalClock || (play.totalClock === previous.totalClock && play.order >= previous.order)))) {
+        this.latestReport = play;
+      }
+    }
     const unique = new Map(this.match.plays.filter(play => Number.isFinite(play.x) && Number.isFinite(play.y) && Number.isFinite(play.totalClock)).map(play => [play.id,play]));
     const plays = [...unique.values()].sort((a,b) => a.period-b.period || a.totalClock-b.totalClock || a.order-b.order);
     const track: TrackEvent[] = [];
@@ -218,7 +271,8 @@ export class MatchEngine {
   private eventBall(event: TrackEvent | undefined, sim: number): Vec {
     if (!event) return { x: 50, y: 50 };
     const start = { x: clamp(event.x ?? 50, 1, 99), y: clamp(event.y ?? 50, 1, 99) };
-    if (event.x2 === null || event.y2 === null) return start;
+    if (event.x2 == null || event.y2 == null || !Number.isFinite(event.x2) || !Number.isFinite(event.y2) ||
+        (this.mode === 'live' && isStoppage(event))) return start;
     const end = { x: clamp(event.x2, 1, 99), y: clamp(event.y2, 1, 99) };
     const local = Math.max(0, sim - event.t);
     if (local < event.duration) {
@@ -265,6 +319,11 @@ export class MatchEngine {
     if (!this.match) return "0'";
     if (this.mode === 'pre') return this.match.status.displayClock || "0'";
     if (this.mode === 'live') {
+      if (this.match.status.state === 'post') {
+        if (this.finalClock) return '终场 · ' + this.finalClock;
+        return this.lastLiveClock ? '终场 · 最近 ' + this.lastLiveClock : '终场';
+      }
+      if (this.match.status.name === 'STATUS_HALFTIME') return '中场';
       return this.match.status.displayClock || `${Math.floor(this.match.status.clock / 60)}'`;
     }
     const minute = Math.floor(this.sim / 60);
@@ -293,11 +352,38 @@ export class MatchEngine {
       return;
     }
     this.rafClock += dt;
+    if (this.mode === 'live' && (this.match.status.state === 'post' || this.match.stale || this.match.playsError ||
+        this.track.at(-1)?.period !== this.match.status.period ||
+        /half.?time|break|suspend|delay/i.test(this.match.status.name))) {
+      // Stop easing the drawn positions as well as the event cursor.
+      if (this.flash && this.rafClock > this.flashUntil) this.flash = null;
+      return;
+    }
     if (this.playing && this.mode !== 'pre') {
       if (this.mode === 'live') {
         const latest = this.track.at(-1);
-        const stopped = /half.?time|break|suspend|delay/i.test(this.match.status.name);
-        if (latest && !stopped && !this.match.stale) {
+        if (this.latestReport && isKickoff(this.latestReport) && this.latestReport.id !== latest?.id) {
+          this.ballOpacity = 0;
+          this.ball.trail = [];
+          this.flash = null;
+          this.updatePlayers(dt, false);
+          return;
+        }
+        if (this.latestReport && isStoppage(this.latestReport) && this.latestReport.id !== latest?.id) {
+          if (this.flash && this.rafClock > this.flashUntil) this.flash = null;
+          return;
+        }
+        if (this.relocating && latest) {
+          this.ballOpacity = Math.max(0, this.ballOpacity - dt / fadeSeconds);
+          if (this.ballOpacity === 0) {
+            this.ball.pos = this.eventBall(latest, latest.t);
+            this.ball.trail = [];
+            this.relocating = false;
+          }
+          return;
+        }
+        this.ballOpacity = Math.min(1, this.ballOpacity + dt / fadeSeconds);
+        if (latest && latest.period === this.match.status.period) {
           this.sim = Math.min(latest.t + latest.duration, this.sim + dt);
         }
       } else {
@@ -355,7 +441,15 @@ export class MatchEngine {
     }
     if (this.flash && this.rafClock > this.flashUntil) this.flash = null;
 
-    this.updatePlayers(dt, snap);
+    if (this.mode === 'live' && event && (isStoppage(event) || event.goal) && !snap) {
+      this.activePlayer = null;
+      for (const player of this.players) {
+        player.active = false;
+        player.hasBall = false;
+      }
+    } else {
+      this.updatePlayers(dt, snap);
+    }
   }
 
   private findPlayer(teamId: string | null, name: string, jersey: string) {
@@ -378,28 +472,34 @@ export class MatchEngine {
     if (!this.match) return;
     const ball = this.ball.pos;
     const event = this.activeEvent;
-    const actor = event ? this.findPlayer(event.teamId, event.playerName, event.jersey) : null;
+    const live = this.mode === 'live';
+    const kickoff = live && this.latestReport && isKickoff(this.latestReport);
+    const actor = event && !kickoff ? this.findPlayer(event.teamId, event.playerName, event.jersey) : null;
     for (const p of this.players) {
       const keeper = /^(g|gk)$/i.test(p.role);
       p.active = p === actor;
       p.hasBall = p === actor && dist(p.pos,ball) < 3;
-      if (keeper) {
+      if (kickoff) {
+        const depth = p.side === 'home' ? p.base.x : 100 - p.base.x;
+        const kickoffDepth = keeper ? depth : 4 + depth * 0.45;
+        p.target = { x: p.side === 'home' ? kickoffDepth : 100 - kickoffDepth, y: p.base.y };
+      } else if (keeper) {
         const goalX = p.side === 'home' ? HOME_GOAL_X : AWAY_GOAL_X;
         p.target = {
           x: goalX + (p.side === 'home' ? 1.2 : -1.2) * ((ball.x - 50) / 50),
           y: clamp(50 + (ball.y - 50) * 0.22, 42, 58),
         };
       } else {
-        const shift = (ball.x - 50) * 0.23;
+        const shift = (ball.x - 50) * (live ? 0.12 : 0.23);
         const compactY = 50 + (p.base.y - 50) * 0.88;
         p.target = {
           x: clamp(p.base.x + shift, 7, 93),
-          y: clamp(compactY + (ball.y - 50) * 0.1, 6, 94),
+          y: clamp(compactY + (ball.y - 50) * (live ? 0.05 : 0.1), 6, 94),
         };
       }
     }
 
-    if (actor) {
+    if (actor && (!live || !/^(g|gk)$/i.test(actor.role))) {
       actor.target.x = lerp(actor.target.x, event?.x ?? ball.x, 0.68);
       actor.target.y = lerp(actor.target.y, event?.y ?? ball.y, 0.68);
       actor.active = true;
@@ -410,9 +510,10 @@ export class MatchEngine {
       p.target.y = clamp(p.target.y, 4, 96);
       // Keep each inferred player near their formation, with a physical speed cap.
       const offset = dist(p.base,p.target);
-      if (offset > 18) {
-        p.target.x = p.base.x + (p.target.x-p.base.x)*18/offset;
-        p.target.y = p.base.y + (p.target.y-p.base.y)*18/offset;
+      const radius = live ? 10 : 18;
+      if (!kickoff && offset > radius) {
+        p.target.x = p.base.x + (p.target.x-p.base.x)*radius/offset;
+        p.target.y = p.base.y + (p.target.y-p.base.y)*radius/offset;
       }
       const dx=p.target.x-p.pos.x, dy=p.target.y-p.pos.y, distance=Math.hypot(dx,dy);
       const step=snap ? distance : Math.min(distance*k,6*dt);
@@ -422,6 +523,8 @@ export class MatchEngine {
   }
 
   setMode(mode: MatchMode) {
+    this.ballOpacity = 1;
+    this.relocating = false;
     this.mode = mode;
     this.speed = mode === 'replay' ? 8 : 1;
     if (mode === 'live') {
@@ -556,9 +659,13 @@ export class MatchEngine {
 
     drawAmbient(ctx, v, cssWidth, cssHeight);
     drawPitch(ctx, v);
+    const opacity = !this.tracking && this.mode === 'live' ? this.ballOpacity : 1;
+    ctx.save();
+    ctx.globalAlpha = opacity;
     drawBallTrail(ctx, this.ball.trail, px, py, v);
+    ctx.restore();
 
-    if (this.flash) {
+    if (this.flash && !this.relocating && opacity === 1) {
       const p = this.ball.pos;
       const age = Math.max(0, 4.2 - (this.flashUntil - this.rafClock));
       const pulse = 1 + Math.sin(age * 8) * 0.12;
@@ -576,7 +683,10 @@ export class MatchEngine {
       if (this.tracking && this.hiddenTrackingPlayers.has(player.id)) continue;
       drawPlayer(ctx, player, px, py, v, options.showNames, options.hoveredId === player.id);
     }
+    ctx.save();
+    ctx.globalAlpha = opacity;
     if (this.tracking ? this.trackingBallVisible : this.track.length > 0) drawBall(ctx, this.ball.pos, px, py, v, this.flash !== null);
+    ctx.restore();
 
     if (this.mode !== 'pre' && this.track.length) {
       drawPlaybackHud(ctx, this, v, px, py);
@@ -909,7 +1019,7 @@ function drawPlaybackHud(
   const event = engine.activeEvent;
   if (!event) return;
   const color = event.teamId === engine.match?.home.id ? '#e8ff8a' : '#ffd98a';
-  if (event.shot || event.goal) {
+  if ((event.shot || event.goal) && event.x2 != null && event.y2 != null && Number.isFinite(event.x2) && Number.isFinite(event.y2)) {
     ctx.save();
     ctx.strokeStyle = color;
     ctx.globalAlpha = 0.38;

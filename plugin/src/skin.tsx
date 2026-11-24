@@ -15,7 +15,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MatchEngine, registerTeamColor } from '../../src/lib/engine';
 import type { EngineSnapshot, MatchResponse, MatchSummary, TimelineEvent } from '../../src/types';
-import { clockLabel, createReplayMatch, frameAt, replayEnd, advanceReplay, replayChapters, type ReplayFile } from '../../src/replay/format';
+import { makeDemo } from '../../src/replay/demo.mjs';
+import { clockLabel, createReplayMatch, frameAt, playerCount, replayEnd, advanceReplay, replayChapters, type ReplayFile } from '../../src/replay/format';
 import widgetCss from './skin.css?inline';
 
 const API = '/api/touchline';
@@ -76,6 +77,9 @@ interface LiveView {
   hidden: boolean;
   hasCoordinates: boolean;
   replays: ReplayEntry[];
+  listWarning?: string;
+  replayError?: string;
+  scheduleUnavailable?: boolean;
   mode: 'live' | 'replay';
   replayTitle: string;
   replayClock: string;
@@ -170,6 +174,8 @@ class LiveFeed {
   private matchTimer: number | undefined;
   private generation = 0;
   private disposed = false;
+  private replayController: AbortController | undefined;
+  private listGeneration = 0;
   private matchController: AbortController | undefined;
   private failures = 0;
 
@@ -181,11 +187,12 @@ class LiveFeed {
 
   /** Replay files placed next to the project (`data/replay`), if the host has any. */
   async loadReplays() {
+    const generation = ++this.listGeneration;
     try {
-      const data = await getJson<{ replays?: ReplayEntry[] }>(`${API}/replays`);
-      if (!this.disposed) update({ replays: Array.isArray(data.replays) ? data.replays : [] });
+      const data = await getJson<{ replays?: ReplayEntry[]; warning?: string }>(`${API}/replays`);
+      if (!this.disposed && generation === this.listGeneration) update({ listWarning: data.warning, replays: Array.isArray(data.replays) ? data.replays : [] });
     } catch {
-      /* host without replay support: the menu simply has no replay section */
+      if (!this.disposed && generation === this.listGeneration) update({ listWarning: '回放列表读取失败，请重新打开菜单重试。' });
     }
   }
 
@@ -209,12 +216,14 @@ class LiveFeed {
     playback.file = null;
     playback.playing = false;
     playback.index = 0;
-    update({ selectedId: null, match: null, snapshot: null, mode: 'live',
+    update({ selectedId: null, match: null, snapshot: null, mode: 'live', replays: [], matches: [], listWarning: undefined, scheduleUnavailable: false, replayError: undefined,
       replayTitle: '', replayClock: '0:00', replayPlaying: false, hidden: false, error: null });
   }
 
   private cancelMatch() {
     this.generation += 1;
+    this.replayController?.abort();
+    this.replayController = undefined;
     this.matchController?.abort();
     this.matchController = undefined;
     this.failures = 0;
@@ -224,6 +233,7 @@ class LiveFeed {
 
   select(id: string) {
     if (this.disposed) return;
+    update({ replayError: undefined });
     const wasReplay = view.mode === 'replay';
     this.cancelMatch();
     if (wasReplay) {
@@ -242,9 +252,23 @@ class LiveFeed {
     this.cancelMatch();
     const generation = this.generation;
     try {
-      const file = await getJson<ReplayFile>(`${API}/replay?id=${encodeURIComponent(id)}`);
+      const controller = new AbortController();
+      this.replayController = controller;
+      update({ replayError: undefined });
+      const file = id === ':demo' ? makeDemo() :
+        await getJson<ReplayFile>(`${API}/replay?id=${encodeURIComponent(id)}`, controller.signal);
       if (this.disposed || generation !== this.generation) return;
-      this.cancelMatch();
+      if (!Array.isArray(file.frames) || !file.frames.length || !Array.isArray(file.players) ||
+          file.teams?.length !== 2 || !(file.fps > 0) || typeof file.title !== 'string') throw new Error('invalid replay');
+      if (file.frames.length % (playerCount(file) * 2 + 2) !== 0 ||
+          !Number.isFinite(file.duration) || !Number.isFinite(file.fps) ||
+          !file.teams.every(team => typeof team?.color === 'string' && typeof team.id === 'string') ||
+          !file.players.every(player => typeof player?.name === 'string') ||
+          (file.periods != null && !Array.isArray(file.periods)) ||
+          (file.substitutions != null && (!Array.isArray(file.substitutions) ||
+            !file.substitutions.every(sub => Number.isFinite(sub?.time))))) throw new Error('invalid replay');
+      file.id = id;
+      const firstFrame = frameAt(file, 0);
       const engine = new MatchEngine();
       engine.setMatch(createReplayMatch(file));
       registerTeamColor(file.teams[0].id, file.teams[0].color);
@@ -260,7 +284,7 @@ class LiveFeed {
         replayClock: clockLabel(file, 0),
         replaySeconds: 0,
         replayPeriod: file.periods?.[0] ?? 1,
-        replayBallMissing: !frameAt(file,0).ball,
+        replayBallMissing: !firstFrame.ball,
         replayPlaying: true,
         windowOpen: true,
         match: null,
@@ -269,8 +293,10 @@ class LiveFeed {
       });
     } catch (error) {
       if (this.disposed || generation !== this.generation) return;
-      update({ error: error instanceof Error ? error.message : String(error) });
+      update({ replayError: '回放读取失败，请检查文件或重新转换，再从菜单选择。' });
       if (view.mode === 'live') void this.pollMatch();
+    } finally {
+      if (generation === this.generation) this.replayController = undefined;
     }
   }
 
@@ -287,20 +313,12 @@ class LiveFeed {
     try {
       const matches = await fetchLive();
       if (this.disposed) return;
-      const stillLive =
-        view.selectedId !== null && matches.some((item) => item.id === view.selectedId);
-      update({ matches });
-      if (!stillLive && view.mode === 'live') {
-        const next = matches[0];
-        if (next) this.select(next.id);
-        else {
-          this.cancelMatch();
-          update({ selectedId: null, match: null, snapshot: null });
-        }
-      }
+      update({ matches, scheduleUnavailable: false });
+      // The live listing can drop a game before its final detail arrives.
+      if (view.mode === 'live' && !this.replayController && !view.selectedId && matches.length) this.select(matches[0].id);
     } catch (error) {
       if (!this.disposed) {
-        update({ error: error instanceof Error ? error.message : String(error) });
+        update({ scheduleUnavailable: true });
       }
     } finally {
       if (!this.disposed) this.schedule(() => void this.pollLive(), LIVE_POLL_MS);
@@ -322,9 +340,14 @@ class LiveFeed {
       if (view.match?.fetchedAt && match.fetchedAt && Date.parse(match.fetchedAt)<Date.parse(view.match.fetchedAt)) return;
       // A play feed failure must not erase the last known event positions.
       if (match.playsError && !match.plays.length && view.match?.id === match.id) match.plays = view.match.plays;
-      this.engine.setMatch(match);
-      this.failures = match.stale || match.playsError ? this.failures + 1 : 0;
-      update({ match, error: match.stale ? '数据源暂不可用，保留最后位置' : match.playsError ? '事件数据暂不可用，保留最后位置' : null });
+      this.engine.setMatch(match, true);
+      // A fresh scoreboard can still advance while the play-by-play feed is down.
+      this.failures = match.stale ? this.failures + 1 : 0;
+      update({
+        match,
+        snapshot: this.engine.snapshot(),
+        error: match.stale ? '数据源暂不可用，保留最后位置' : match.playsError ? '事件数据暂不可用，保留最后位置' : null,
+      });
     } catch (error) {
       if (current()) {
         this.failures++;
@@ -333,7 +356,7 @@ class LiveFeed {
       }
     } finally {
       if (current()) {
-        const interval = Math.min(30000, MATCH_POLL_MS * 2 ** Math.min(this.failures,3));
+        const interval = view.match?.status.state === 'post' ? 60000 : Math.min(30000, MATCH_POLL_MS * 2 ** Math.min(this.failures,3));
         this.matchTimer = window.setTimeout(() => void this.pollMatch(), Math.max(1000, interval-(Date.now()-started)));
       }
     }
@@ -343,6 +366,23 @@ class LiveFeed {
 let feed: LiveFeed | null = null;
 
 /* ------------------------------------------------------------- shared bits */
+
+function liveQuality(state: LiveView) {
+  const match = state.match;
+  const fetched = Date.parse(match?.fetchedAt || match?.source.fetchedAt || '');
+  const sync = Number.isFinite(fetched)
+    ? '最近同步 ' + Math.max(0, Math.floor((Date.now() - fetched) / 1000)) + ' 秒前'
+    : '等待比赛数据';
+  if (match?.playsError && !match.stale) return '事件暂不可用，保留最后位置 · 比分' + sync;
+  if (state.error || match?.stale) return '同步异常，保留最后位置 · ' + sync;
+  if (!match) return sync;
+  const event = state.snapshot?.lastEvent;
+  if (!event || event.period !== match.status.period) {
+    const label = match.status.period === 2 ? '等待下半场位置数据' : '等待本节位置数据';
+    return sync + ' · ' + label;
+  }
+  return sync + ' · 最近位置 ' + (event.displayClock || Math.floor(event.totalClock / 60) + "'");
+}
 
 function currentMatch(state: LiveView) {
   return (
@@ -537,8 +577,10 @@ function MatchList({
     <>
       <div className="tl-menu__head">
         正在直播 · {state.matches.length}
-        {state.error ? <em>· 连接不稳定</em> : null}
+        {state.scheduleUnavailable ? <em>· 赛事源暂不可用，将自动重试</em> : null}
       </div>
+      {state.listWarning && <div className="tl-menu__head" role="status">{state.listWarning}</div>}
+      {state.replayError && <div className="tl-menu__head" role="alert">{state.replayError}</div>}
       {state.matches.map((item) => (
         <button
           type="button"
@@ -564,7 +606,7 @@ function MatchList({
           </span>
           <span className="tl-item__clock">
             {item.status.displayClock}
-            {item.status.shortDetail ? ` · ${item.status.shortDetail}` : ''}
+            {item.status.shortDetail && item.status.shortDetail !== item.status.displayClock ? ` · ${item.status.shortDetail}` : ''}
           </span>
         </button>
       ))}
@@ -606,7 +648,7 @@ function MatchWindow() {
   // The window can stay mounted while returning null. Start/stop drawing when
   // its actual canvas appears/disappears, including replay and boss-key changes.
   const canvasReady = !state.hidden && state.windowOpen &&
-    (isReplayMode || state.matches.length > 0) && (isReplayMode || state.hasCoordinates);
+    (isReplayMode || !!state.match || state.matches.length > 0) && (isReplayMode || state.hasCoordinates);
   const height = size.height + (state.eventsOpen && !isReplayMode ? EVENTS_HEIGHT : 0);
   const widthRef = useRef(width);
   const heightRef = useRef(height);
@@ -745,10 +787,10 @@ function MatchWindow() {
     writeStored(STORE.pos, posRef.current);
   };
 
-  const chapters = useMemo(() => playback.file ? replayChapters(playback.file) : [], [state.replayTitle, state.mode]);
+  const chapters = useMemo(() => playback.file ? replayChapters(playback.file) : [], [playback.file]);
   const isReplay = isReplayMode;
   if (state.hidden || !state.windowOpen) return null;
-  if (!isReplay && !state.matches.length) return null;
+  if (!isReplay && !state.match && !state.matches.length) return null;
 
   const selected = isReplay ? null : currentMatch(state);
   const snapshot = state.snapshot;
@@ -843,7 +885,7 @@ function MatchWindow() {
             className="tl-icon"
             title="切换直播 / 回放"
             aria-expanded={open}
-            onClick={() => setOpen((value) => !value)}
+            onClick={() => { if (!open) void feed?.loadReplays(); setOpen(!open); }}
           >
             ▾
           </button>
@@ -870,7 +912,7 @@ function MatchWindow() {
         </select>
       </div>}
       {!isReplay && <div className="tl-live-quality" role="status">
-        事件推演 · {state.error ? '同步异常，保留最后位置' : !state.match?.plays.some(p => Number.isFinite(p.x) && Number.isFinite(p.y)) ? '等待坐标' : state.match?.stale ? '数据已过期' : `最近同步 ${Math.max(0,Math.floor((Date.now()-Date.parse(state.match?.fetchedAt || state.match?.source?.fetchedAt || new Date().toISOString()))/1000))} 秒前`}
+        事件推演 · {liveQuality(state)}
       </div>}
       {state.eventsOpen && !isReplay && <MatchEvents match={state.match} />}
 
@@ -883,6 +925,7 @@ function MatchWindow() {
               setOpen(false);
             }}
           />
+          <button type="button" className="tl-item" onClick={() => { setOpen(false); void feed?.playReplay(':demo'); }}>播放合成演示 · 30 秒</button>
           {state.replays.length > 0 && (
             <>
               <div className="tl-menu__head tl-menu__head--replay">回放</div>
@@ -948,15 +991,16 @@ function MatchPill() {
         bottom: Math.max(8, window.innerHeight - rect.top + 8),
       });
     }
+    void feed?.loadReplays();
     setOpen(true);
   };
 
   const isReplay = state.mode === 'replay' && playback.file !== null;
   if (state.hidden) return null;
-  /* Keep the pill reachable when nothing is live, as long as replays exist. */
-  if (!isReplay && !state.matches.length && !state.replays.length) return null;
+
 
   const selected = isReplay ? null : currentMatch(state);
+  const offerDemo = !isReplay && !selected;
   const snapshot = state.snapshot;
   const clock = isReplay
     ? state.replayClock
@@ -968,9 +1012,9 @@ function MatchPill() {
         <button
           type="button"
           className="tl-pill__main"
-          title={`${state.windowOpen ? '隐藏比赛小窗' : '显示比赛小窗'}（${BOSS_KEY.label} 一键隐藏/恢复）`}
-          aria-pressed={state.windowOpen}
-          onClick={() => setWindowOpen(!state.windowOpen)}
+          title={offerDemo ? '播放合成演示' : `${state.windowOpen ? '隐藏比赛小窗' : '显示比赛小窗'}（${BOSS_KEY.label} 一键隐藏/恢复）`}
+          aria-pressed={offerDemo ? undefined : state.windowOpen}
+          onClick={() => offerDemo ? void feed?.playReplay(':demo') : setWindowOpen(!state.windowOpen)}
         >
           <span className="tl-dot" />
           <span className="tl-clock">{clock}</span>
@@ -986,7 +1030,7 @@ function MatchPill() {
               <span className="tl-team">{selected.away.abbr}</span>
             </>
           ) : (
-            <span className="tl-team">暂无直播</span>
+            <span className="tl-team">{state.scheduleUnavailable ? '赛事源暂不可用' : '暂无直播'} · 播放合成演示</span>
           )}
         </button>
         <button
@@ -1000,9 +1044,12 @@ function MatchPill() {
         </button>
       </div>
 
+      {state.replayError && !open && <span role="alert">{state.replayError}</span>}
       {open && menuPos && (
         <div
           className="tl-menu tl-menu--fixed"
+          popover="manual"
+          ref={showPillMenu}
           role="menu"
           aria-label="直播与回放"
           style={{ right: menuPos.right, bottom: menuPos.bottom }}
@@ -1014,6 +1061,7 @@ function MatchPill() {
               setOpen(false);
             }}
           />
+          <button type="button" className="tl-item" onClick={() => { setOpen(false); void feed?.playReplay(':demo'); }}>播放合成演示 · 30 秒</button>
           {state.replays.length > 0 && (
             <>
               <div className="tl-menu__head tl-menu__head--replay">回放</div>
@@ -1046,6 +1094,11 @@ function MatchPill() {
 }
 
 /* ---------------------------------------------------------------- plugin */
+
+// The composer and shell overlay have separate stacking contexts in DSH.
+function showPillMenu(node: HTMLDivElement | null) {
+  if (node?.isConnected) node.showPopover?.();
+}
 
 export function apply(ctx: any) {
   const style = document.createElement('style');

@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-touchline",
-  "version": "0.8.3",
+  "version": "1.0.0",
   "type": "module",
   "description": "Touchline Football: floating football scores, event-based pitch visualization and local tracking replay for DSH. No bundled match data.",
   "license": "MIT",

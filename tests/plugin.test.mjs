@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
 const result = await build({
-  stdin: { contents: readFileSync('plugin/src/skin.tsx', 'utf8') + '\nexport { LiveFeed, view, playback, createReplayMatch, keyMoments };',
+  stdin: { contents: readFileSync('plugin/src/skin.tsx', 'utf8') + '\nexport { LiveFeed, view, playback, createReplayMatch, keyMoments, liveQuality };',
     resolveDir: fileURLToPath(new URL('../plugin/src/', import.meta.url)), loader: 'tsx' },
   bundle: true, write: false, format: 'cjs', platform: 'node',
   loader: { '.css': 'text' }, external: ['react', 'react/jsx-runtime'],
@@ -34,6 +34,26 @@ function setup() {
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
+test('live clock and corrected score reach the capsule without a canvas frame', async () => {
+  const s = setup();
+  const match = s.createReplayMatch({ ...fixture, id: '123456' });
+  s.feed.select(match.id);
+  s.requests[0].reply(match);
+  await flush();
+  // The window published its last frame before the user closed it.
+  s.view.snapshot = s.feed.engine.snapshot();
+  const poll = [...s.timers.values()][0];
+  poll();
+  s.requests[1].reply({
+    ...match, home: { ...match.home, score: 1 },
+    status: { ...match.status, displayClock: "45'+8'" },
+  });
+  await flush();
+  assert.equal(s.view.snapshot.clockLabel, "45'+8'");
+  assert.equal(s.view.snapshot.score.home, 1);
+  s.feed.dispose();
+});
+
 test('late live response cannot overwrite replay or restart live polling', async () => {
   const s = setup(); s.feed.select('123456');
   const pending = s.feed.playReplay('demo');
@@ -46,9 +66,23 @@ test('late live response cannot overwrite replay or restart live polling', async
 
 test('last replay selection wins when responses arrive out of order', async () => {
   const s = setup(); const first = s.feed.playReplay('first'); const second = s.feed.playReplay('second');
+  assert.equal(s.requests[0].signal.aborted, true);
   s.requests[1].reply({ ...fixture, title: 'Second' }); await second;
   s.requests[0].reply({ ...fixture, title: 'First' }); await first;
   assert.equal(s.view.replayTitle, 'Second');
+});
+
+test('a damaged replay keeps the previous selection playable and reports recovery', async () => {
+  const s = setup();
+  await s.feed.playReplay(':demo');
+  const previous = s.playback.file;
+  const pending = s.feed.playReplay('broken');
+  s.requests[0].reply({ ...fixture, frames: [42] });
+  await pending;
+  assert.equal(s.playback.file, previous);
+  assert.match(s.view.replayError, /重新转换/);
+  await s.feed.playReplay(':demo');
+  assert.equal(s.view.replayError, undefined);
 });
 
 test('switching back to live invalidates an unfinished replay request', async () => {
@@ -95,7 +129,10 @@ test('an older fetched snapshot cannot rewind match state', async()=>{
 test('failed event refresh preserves last known positions and reports degradation',async()=>{
  const s=setup();s.feed.select('123456');const m=s.createReplayMatch({...fixture,id:'123456'});m.plays=[{id:'p',totalClock:10,period:1,type:'pass',x:20,y:30,x2:null,y2:null}];
  s.requests[0].reply(m);await flush();[...s.timers.values()][0]();s.requests[1].reply({...m,plays:[],playsError:'timeout'});await flush();
- assert.equal(s.view.match.plays.length,1);assert.match(s.view.error,/事件数据/);s.feed.dispose();
+ assert.equal(s.view.match.plays.length,1);
+ assert.match(s.liveQuality(s.view),/事件暂不可用/);
+ assert.equal(s.feed.failures,0,'a successful summary must retain normal score polling');
+ s.feed.dispose();
 });
 
 
@@ -109,4 +146,48 @@ test('own-goal log uses reported score and ESPN beneficiary without reversing tw
   match.plays=[{id:'6',homeScore:0,awayScore:7}];
   assert.equal(keyMoments(match).at(-1).score.away,7);
   assert.equal(keyMoments(match).at(-1).score.home,0);
+});
+
+test('split score and coordinates, duplicate goals, correction, then final detail after delisting', async () => {
+  const s = setup();
+  const match = s.createReplayMatch({ ...fixture, id: '123456' });
+  const position = { id: 'p', order: 1, totalClock: 2700, period: 1, type: 'pass', x: 30, y: 40, x2: null, y2: null };
+  match.plays = [position];
+  s.feed.select(match.id);
+  s.requests[0].reply(match);
+  await flush();
+  async function detail(data) {
+    const pending = s.feed.pollMatch();
+    s.requests.at(-1).reply(data);
+    await pending;
+  }
+  const second = { ...match, status: { ...match.status, period: 2, displayClock: "46'" },
+    home: { ...match.home, score: 1 }, fetchedAt: '2026-11-20T10:00:00Z' };
+  await detail(second);
+  assert.equal(s.view.snapshot.score.home, 1);
+  assert.match(s.liveQuality(s.view), /等待下半场位置数据/);
+  assert.equal(s.keyMoments(s.view.match).length, 0);
+  const goal = { ...position, id: 'g', playerName: 'Scorer', jersey: '9', typeText: 'Goal', type: 'goal', goal: true, teamId: match.home.id, period: 2,
+    totalClock: 2780, displayClock: "46'", homeScore: 1, awayScore: 0 };
+  const aligned = { ...second, timeline: [goal, goal], plays: [goal, position, goal] };
+  await detail(aligned);
+  assert.match(s.liveQuality(s.view), /最近位置 46'/);
+  assert.equal(s.keyMoments(s.view.match).length, 1);
+  assert.equal(s.keyMoments(s.view.match)[0].score.home, 1);
+  const corrected = { ...second, home: match.home, fetchedAt: '2026-11-20T10:00:10Z' };
+  await detail(corrected);
+  await detail(aligned);
+  assert.equal(s.view.snapshot.score.home, 0);
+  assert.equal(s.keyMoments(s.view.match).length, 0);
+  const list = s.feed.pollLive();
+  s.requests.at(-1).reply({ matches: [] });
+  await list;
+  assert.equal(s.view.selectedId, match.id);
+  await detail({ ...corrected, status: { ...second.status, state: 'post', displayClock: "90'+5'" },
+    away: { ...match.away, score: 2 } });
+  s.feed.engine.tick(1);
+  assert.equal(s.feed.engine.snapshot().clockLabel, "终场 · 90'+5'");
+  assert.equal(s.feed.engine.snapshot().score.away, 2);
+  assert.equal(s.feed.engine.playing, false);
+  s.feed.dispose();
 });

@@ -9,11 +9,11 @@ MIT 开源插件。为 DeepSeek Harness 提供可拖动的 2D 比赛小窗、比
 - 使用 `shell.overlay` 与 `conversation.composer.dock` 两个插槽。
 - React 及 JSX runtime 由宿主提供，不在插件中重复打包。
 
-已在 Windows 的 DSH 0.2.2-rc.1 验证安装、挂载、合成回放和停用后重新启用；真实直播切换仍待有赛事时补验。尚未建立最低 DSH 版本兼容矩阵。
+1.0.0 基于已在 Windows / DSH 0.2.3-alpha.2 完成验收的候选版，覆盖全新安装、从 0.8.3 升级，以及实际比赛直播与本地追踪回放的往返切换。
 
 ## 安装
 
-普通用户从 [GitHub Release](https://github.com/KhalilWong/dsh-plugin-touchline-football/releases/tag/v0.8.2) 下载 `dsh-plugin-touchline-0.8.2.tgz`，在 DSH“插件 → 添加插件 → 安装第三方插件”中输入文件绝对路径并启用。无需构建源码。DSH Market 已收录；搜索 `touchline`，目录安装版本可能暂时落后于 GitHub Release。
+在 DSH「插件 → 发现」搜索 `touchline`，核对作者 `KhalilWong` 和版本 `1.0.0` 后安装。市场索引可能稍晚更新；也可从 [GitHub Release](https://github.com/KhalilWong/dsh-plugin-touchline-football/releases/tag/v1.0.0) 下载 `dsh-plugin-touchline-1.0.0.tgz`，在“添加插件 → 安装第三方插件”中输入文件绝对路径并启用。无需构建源码。
 
 ## 从源码构建
 
@@ -36,7 +36,7 @@ npm run plugin:pack
 { "source": "espn", "replayDir": "/absolute/path/to/replays" }
 ```
 
-`source` 默认 `espn`。安装包不包含赛事或回放数据；使用回放时应显式指定 `replayDir`。默认路径仅适合源码目录开发。可在项目根目录运行 `npm run replay:demo` 生成合成演示，再把配置指向该项目的 `data/replay` 绝对路径。
+`source` 默认 `espn`。暂无直播时可点击比分胶囊的「播放合成演示」，立即体验 30 秒回放。使用自己的回放时，将 `replayDir` 指向本地文件夹，重新打开场次菜单即可刷新列表。
 
 ## 操作
 
@@ -63,4 +63,4 @@ npm run plugin:pack
 
 直播使用 ESPN 公开接口，球员位置由事件和阵型推演，不是实时光学追踪。MIT 许可覆盖本项目代码，不授予第三方赛事数据使用权。上游接口可能变化；发布包不包含赛事数据、下载样本或队徽文件。
 
-0.8.2 的 HTTP 路由要求宿主提供 `connection.admit()`，缺失时拒绝访问。
+HTTP 路由使用宿主认证并限制为 owner；旧宿主通过 `connection.admit()` 检查，缺少可验证身份时拒绝访问。

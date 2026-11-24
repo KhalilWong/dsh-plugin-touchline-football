@@ -31,3 +31,4 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check:plugin
+      - run: npm run check:live

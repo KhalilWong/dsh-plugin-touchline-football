@@ -20,7 +20,7 @@
  *
  * @module dsh-plugin-touchline
  */
-import { readdir, readFile } from 'node:fs/promises';
+import { open, readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getSource, listSources } from './host/sources/index.js';
@@ -213,30 +213,79 @@ function queryParam(req, key) {
   }
 }
 
-/** List replay files (read-only, no provider traffic). */
-async function serveReplayList(res, dir) {
+// Our converter writes metadata before the large frames array. Older files
+// can have any field order and still use the full JSON reader.
+async function readReplayHeader(filename, size) {
+  const file = await open(filename, 'r');
   try {
-    const names = (await readdir(dir)).filter((name) => name.endsWith('.json'));
+    const buffer = Buffer.alloc(16384);
+    const { bytesRead } = await file.read(buffer);
+    const prefix = buffer.toString('utf8', 0, bytesRead);
+    if (bytesRead < size) {
+      const frames = /,\s*"frames"\s*:\s*\[/.exec(prefix);
+      if (frames) {
+        try {
+          const header = JSON.parse(prefix.slice(0, frames.index) + '}');
+          if (typeof header.title === 'string' && typeof header.duration === 'number' &&
+              typeof header.hasBall === 'boolean' && header.fps > 0 && header.teams?.length === 2 &&
+              Array.isArray(header.players)) return header;
+        } catch { /* Fall back for a nested key or a larger header. */ }
+      }
+    }
+    const data = JSON.parse(bytesRead === size ? prefix : await readFile(filename, 'utf8'));
+    if (!Array.isArray(data.frames) || !data.frames.length || !Array.isArray(data.players) ||
+        data.teams?.length !== 2 || !(data.fps > 0)) throw new Error('invalid replay');
+    return data;
+  } finally {
+    await file.close();
+  }
+}
+
+function createReplayList(dir, configured) {
+  const metadata = new Map();
+  let pending;
+
+  async function scan() {
+    let names;
+    try {
+      names = (await readdir(dir, { withFileTypes: true }))
+        .filter(entry => entry.isFile() && entry.name.endsWith('.json')).map(entry => entry.name);
+    } catch (error) {
+      metadata.clear();
+      return { replays: [], warning: error.code === 'ENOENT' && !configured ? '' : '无法读取回放目录，请检查插件的 replayDir 路径和读取权限。' };
+    }
+    const present = new Set(names);
+    for (const key of metadata.keys()) if (!present.has(key)) metadata.delete(key);
     const replays = [];
+    let invalid = 0;
     for (const name of names) {
       try {
-        const data = JSON.parse(await readFile(path.join(dir, name), 'utf8'));
-        replays.push({
-          id: name.replace(/\.json$/, ''),
-          title: typeof data.title === 'string' ? data.title : name,
-          duration: Number(data.duration) || 0,
-          fps: Number(data.fps) || 0,
-          hasBall: Boolean(data.hasBall),
-        });
+        const filename = path.join(dir, name);
+        const info = await stat(filename);
+        const signature = [info.ino, info.size, info.mtimeMs, info.ctimeMs].join('/');
+        let cached = metadata.get(name);
+        if (cached?.signature !== signature) {
+          try {
+            const data = await readReplayHeader(filename, info.size);
+            cached = { signature, entry: { id: name.slice(0, -5), title: typeof data.title === 'string' ? data.title : name,
+              duration: Number(data.duration) || 0, fps: Number(data.fps), hasBall: Boolean(data.hasBall) } };
+          } catch (error) {
+            if (!(error instanceof SyntaxError || error.message === 'invalid replay')) throw error;
+            cached = { signature, entry: null };
+          }
+          metadata.set(name, cached);
+        }
+        if (cached.entry) replays.push(cached.entry);
+        else invalid++;
       } catch {
-        /* skip a malformed file rather than failing the list */
+        metadata.delete(name);
+        invalid++;
       }
     }
     replays.sort((a, b) => a.title.localeCompare(b.title));
-    sendJson(res, 200, { replays });
-  } catch {
-    sendJson(res, 200, { replays: [] });
+    return { replays, warning: invalid ? `${invalid} 个回放文件损坏或无法读取，请重新转换文件后打开菜单。` : '' };
   }
+  return () => pending ??= scan().finally(() => { pending = undefined; });
 }
 
 /** Stream one replay JSON from the replay directory. */
@@ -273,6 +322,7 @@ export function apply(ctx, config = {}) {
 
   const replayDir = resolveReplayDir(config);
   const requestCache = createCache();
+  const listReplays = createReplayList(replayDir, Boolean(config.replayDir?.trim?.()));
 
   const routes = [
     {
@@ -292,18 +342,19 @@ export function apply(ctx, config = {}) {
     { kind: 'exact', path: `${API_PREFIX}/live`, handler: (req, res) => serveLive(req, res, source, requestCache.cached) },
     { kind: 'exact', path: `${API_PREFIX}/scoreboard`, handler: (req, res) => serveScoreboard(req, res, source, requestCache.cached) },
     { kind: 'exact', path: `${API_PREFIX}/match`, handler: (req, res) => serveMatch(req, res, source, requestCache.cached) },
-    { kind: 'exact', path: `${API_PREFIX}/replays`, handler: (req, res) => serveReplayList(res, replayDir) },
+    { kind: 'exact', path: `${API_PREFIX}/replays`, handler: async (req, res) => sendJson(res, 200, await listReplays()) },
     { kind: 'exact', path: `${API_PREFIX}/replay`, handler: (req, res) => serveReplay(req, res, replayDir) },
   ];
 
   ctx.effect(() => {
     const disposers = routes.map((route) => ctx.webServer.register({
       ...route,
-      handler: (req, res) => {
-        // Exact routes bypass the host's /api prefix handler. Apply its trust
-        // and authentication fence explicitly, before file or upstream access.
+      auth: 'required',
+      handler: (req, res, peer) => {
+        // Current WebServer supplies its authenticated peer. Earlier hosts
+        // delegate the same decision to Connection.admit in the handler.
         let admission;
-        try { admission = ctx.connection?.admit?.(req); } catch { /* fail closed */ }
+        try { admission = peer === undefined ? ctx.connection?.admit?.(req) : { peer }; } catch { /* fail closed */ }
         if (!admission || 'rejection' in admission || admission.peer?.principal?.kind !== 'owner') {
           const status = admission?.rejection === 401 ? 401 : 403;
           return sendJson(res, status, { error: status === 401 ? 'unauthorized' : 'forbidden' });

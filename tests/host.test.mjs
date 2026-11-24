@@ -20,6 +20,7 @@ function setup(loader, admit = () => ({ peer: { principal: { kind: 'owner' } } }
   return () => {
     const routes = new Map(); const effects = [];
     sandbox.module.exports.apply({ connection: { admit }, webServer: { register(route) {
+      assert.equal(route.auth, 'required');
       assert.ok(!routes.has(route.path)); routes.set(route.path, route.handler);
       return () => routes.delete(route.path);
     } }, effect(fn) { effects.push(fn()); } });
@@ -77,4 +78,15 @@ test('all HTTP routes fail closed before accessing provider or local replay data
     }
     assert.equal(calls,0);host.dispose();
   }
+});
+
+test('modern web server routes require authentication and accept only the admitted owner', async () => {
+  const host = setup(async () => board('published'), () => { throw Error('legacy API'); })();
+  const handler = host.routes.get('/api/touchline/health');
+  for (const [kind, expected] of [['owner', 200], ['guest', 403]]) {
+    let status;
+    await handler({ method: 'GET' }, { writeHead(code) { status = code; }, end() {} }, { principal: { kind } });
+    assert.equal(status, expected);
+  }
+  host.dispose();
 });

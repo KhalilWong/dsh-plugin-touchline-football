@@ -33,7 +33,7 @@ const roots = ['.github', 'docs', 'plugin', 'public', 'scripts', 'server', 'src'
 const files = ['.gitignore', 'README.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'LICENSE',
   'package.json', 'package-lock.json', 'tsconfig.json', 'vite.config.ts', 'index.html'];
 const generated = new Set(['plugin/client.js', 'public/replay.js']);
-const extensions = /\.(?:md|mjs|js|ts|tsx|css|html|json|yml|yaml|svg)$/;
+const extensions = /\.(?:md|mjs|js|mts|ts|tsx|css|html|json|yml|yaml|svg)$/;
 function visit(dir) {
   for (const entry of readdirSync(join(root, dir), { withFileTypes: true })) {
     const file = `${dir}/${entry.name}`;

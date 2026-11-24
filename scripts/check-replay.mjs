@@ -11,6 +11,15 @@ const bundle=await build({stdin:{contents:`
 import React from 'react';import {createRoot} from 'react-dom/client';
 import {apply,playback} from './plugin/src/skin';
 import {frameAt} from './src/replay/format';
+import {MatchEngine} from './src/lib/engine';
+const draw = MatchEngine.prototype.draw;
+MatchEngine.prototype.draw = function(...args) {
+  draw.apply(this,args);
+  if (this.tracking && !window.firstFrameAt) window.firstFrameAt = performance.now();
+};
+document.addEventListener('click', e => {
+  if(e.target.closest('.tl-item') && !window.selectedAt) window.selectedAt=performance.now();
+},true);
 window.visiblePlayers=()=>frameAt(playback.file,playback.index).players.filter(p=>p.visible).map(p=>p.id);
 window.inspectReplay=()=>({seconds:playback.index/(playback.file?.fps||1),now:performance.now(),playing:playback.playing});
 window.nearEnd=()=>{playback.index=playback.file.duration*playback.file.fps-2;};
@@ -27,14 +36,23 @@ try{
   return r.fulfill({json:data});
  });
  await page.goto('http://replay.test/');await page.addScriptTag({content:bundle.outputFiles[0].text});
+ const cdp=await page.context().newCDPSession(page);
+ const heapBefore=(await cdp.send('Runtime.getHeapUsage')).usedSize;
  await page.getByTitle('切换直播 / 回放').click();await page.getByRole('button',{name:new RegExp('Metrica')}).click();
  const canvas=page.locator('.tl-window canvas');await canvas.waitFor({state:'visible'});
  await page.waitForFunction(()=>window.inspectReplay().seconds>0.2);
- const start=await page.evaluate(()=>window.inspectReplay());const picture=await canvas.evaluate(c=>c.toDataURL());
+ const firstFrameMs=await page.evaluate(()=>Math.round(window.firstFrameAt-window.selectedAt));
+ const heapAfter=(await cdp.send('Runtime.getHeapUsage')).usedSize;
+ // The playback index advances on a rendering frame. Compare two rendered
+ // indices with their frame timestamps, including any intervening stall.
+ const renderedTime=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(now=>{
+   resolve({seconds:window.inspectReplay().seconds,now});
+ })));
+ const start=await renderedTime();const picture=await canvas.evaluate(c=>c.toDataURL());
  await page.waitForTimeout(1500);
  // Force a slow rendering frame. Playback must catch up, not discard elapsed time.
  await page.evaluate(()=>{const end=performance.now()+650;while(performance.now()<end){};});await page.waitForTimeout(150);
- const after=await page.evaluate(()=>window.inspectReplay());
+ const after=await renderedTime();
  const drift=Math.abs((after.seconds-start.seconds)-(after.now-start.now)/1000);
  assert.ok(drift<.15,`wall-clock drift ${drift}`);
  assert.notEqual(await canvas.evaluate(c=>c.toDataURL()),picture);
@@ -45,7 +63,7 @@ try{
  assert.ok((await page.evaluate(()=>window.inspectReplay().seconds))>paused);
  mkdirSync('tmp',{recursive:true});await page.screenshot({path:'tmp/metrica-replay.png'});
  await page.getByTitle('播放 / 暂停').click();
- for(const sub of replay.substitutions??[]) {
+ for(const sub of [...(replay.substitutions??[]), ...(replay.substitutions??[]).slice().reverse()]) {
   for(const [seconds,before] of [[sub.time-1,true],[sub.time+.1,false]]) {
    await page.getByLabel('回放片段').selectOption(String(seconds));
    await page.waitForTimeout(80);
@@ -53,6 +71,16 @@ try{
    assert.equal(visible.includes(sub.out),before);assert.equal(visible.includes(sub.in),!before);
    assert.equal(visible.length,22);
   }
+ }
+ const stride=((replay.formatVersion>=3 ? replay.players.length : 22)*2)+2;
+ const missing=replay.frames.findIndex((value,i)=>i%stride===stride-2 && value===null && replay.frames[i+stride]===null);
+ if(missing>=0){
+   const seconds=Math.ceil(Math.floor(missing/stride)/replay.fps*10)/10;
+   await page.getByLabel('回放进度').evaluate((el,value)=>{
+     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,String(value));
+     el.dispatchEvent(new Event('input',{bubbles:true}));
+   },seconds);
+   await page.waitForFunction(()=>document.querySelector('.tl-replay-title')?.textContent.includes('球位置缺失'));
  }
  const second=replay.periods?.findIndex(p=>p===2)??-1;
  if(second>=0){await page.getByLabel('回放片段').selectOption(String(second/replay.fps));await page.waitForTimeout(550);assert.match(await page.locator('.tl-replay-controls').innerText(),/下半场/);}
@@ -65,6 +93,6 @@ try{
  await page.getByTitle('播放 / 暂停').click();await page.waitForTimeout(100);
  assert.ok((await page.evaluate(()=>window.inspectReplay().seconds))<1);
  assert.deepEqual(errors,[]);
- const result={source:path,sha256:createHash('sha256').update(readFileSync(path)).digest('hex'),duration:replay.duration,frames:replay.frames.length/((replay.formatVersion>=3?replay.players.length:22)*2+2),wallClockDriftSeconds:drift,pauseResume:true,ending,substitutionsChecked:replay.substitutions?.length??0,secondHalf:second>=0,restart:true,pageErrors:errors};
+ const result={firstFrameMs,heapBefore,heapAfter,source:path,sha256:createHash('sha256').update(readFileSync(path)).digest('hex'),duration:replay.duration,frames:replay.frames.length/((replay.formatVersion>=3?replay.players.length:22)*2+2),wallClockDriftSeconds:drift,pauseResume:true,ending,substitutionsChecked:replay.substitutions?.length??0,secondHalf:second>=0,missingBall:missing>=0,restart:true,pageErrors:errors};
  writeFileSync('tmp/metrica-acceptance.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }finally{await browser.close();}

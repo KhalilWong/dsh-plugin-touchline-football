@@ -34,18 +34,32 @@ const browser = await chromium.launch({ executablePath: process.env.EDGE_PATH ||
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const errors=[]; page.on('pageerror', e=>errors.push(e.message));
-  let liveMatch=null, matchRequests=0;
+  let liveMatch=null, matchRequests=0, localFiles=false;
   await page.route('http://touchline.test/**', route => {
     const pathname=new URL(route.request().url()).pathname;
     const data=pathname.endsWith('/health')?{capabilities:{coordinates:true}}:
-      pathname.endsWith('/replays')?{replays:[{id:'demo',title:replay.title,duration:60,fps:10}]}:
+      pathname.endsWith('/replays')?{replays:localFiles?[{id:'demo',title:replay.title,duration:60,fps:10}]:[]}:
       pathname.endsWith('/replay')?replay:
       pathname.endsWith('/match')?(matchRequests++,liveMatch):{matches:liveMatch?[liveMatch]:[]};
     if(pathname==='/')return route.fulfill({contentType:'text/html',body:'<!doctype html><html><body></body></html>'});
     return route.fulfill({json:data});
   });
   await page.goto('http://touchline.test/'); await page.addScriptTag({content:bundle.outputFiles[0].text});
+  await page.getByTitle('播放合成演示', {exact:true}).click();
+  await page.locator('.tl-window canvas').waitFor();
+  await page.getByTitle('播放 / 暂停').click();
+  await page.getByRole('slider').press('End');
+  assert.match(await page.locator('.tl-window .tl-clock').innerText(), /0:30/);
+  await page.waitForTimeout(250);
+  assert.match(await page.locator('.tl-window .tl-clock').innerText(), /0:30/);
+  await page.getByTitle('播放 / 暂停').click();
+  await page.waitForFunction(()=>document.querySelector('.tl-window .tl-clock')?.textContent==='0:01');
+  await page.evaluate(()=>window.unmountPlugin());
+  localFiles=true;
+  await page.evaluate(()=>window.mountPlugin());
   await page.getByTitle('切换直播 / 回放').click();
+  assert.equal(await page.locator('.tl-menu--fixed').evaluate(menu => menu.matches(':popover-open')), true,
+    'the composer menu must render above the floating window');
   await page.getByRole('button',{name:/Synthetic regression/}).click();
   const canvas=page.locator('[data-dsh-touchline-window] canvas');
   await canvas.waitFor({state:'visible'});

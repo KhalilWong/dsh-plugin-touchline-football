@@ -120,6 +120,8 @@ export interface Play {
   ownGoal: boolean;
   shootout: boolean;
   wallclock?: string | null;
+  /** Derived from the first reported centre pass following a goal. */
+  restart?: 'kickoff-after-goal';
   homeScore?: number | null;
   awayScore?: number | null;
 }
