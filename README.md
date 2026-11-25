@@ -17,13 +17,13 @@
 
 1.0.0 基于已完成验收的候选版：在 **Windows / DSH 0.2.3-alpha.2** 验证全新安装、从 0.8.3 升级、真实直播及整场回放。其他宿主版本未建立完整兼容矩阵。详见[验收记录](docs/acceptance-1.0.0-rc.1.md)。
 
-1. 从 [Release](https://github.com/KhalilWong/dsh-plugin-touchline-football/releases/tag/v1.0.0) 下载 **`dsh-plugin-touchline-1.0.0.tgz`**。请选择这个安装包，GitHub 自动生成的 Source code 归档用于开发。
-2. 在 DSH 打开“插件 → 添加插件 → 安装第三方插件”，输入下载文件的**绝对路径**并安装。
-3. 启用插件，返回会话页面，在输入区的比分胶囊中选择直播或回放。若界面未更新，刷新 Web GUI；更新宿主代码后可能需要重载插件或重启 DSH。
+1. 在 DSH 打开「插件 → 发现」，选择 **Awesome DSH Plugin 插件精选**，搜索 **`touchline`**。
+2. 核对作者 **`KhalilWong`**、版本 **`1.0.0`**，点击「安装」，完成后点击「立即启用」。
+3. 返回会话页面，在输入区的比分胶囊中选择直播或回放。若界面未更新，刷新 Web GUI；更新宿主代码后可能需要重载插件或重启 DSH。
 
 普通用户无需克隆仓库或执行构建命令。可用 Release 中的 `SHA256SUMS-1.0.0.txt` 校验下载文件。
 
-也可在 DSH「插件 → 发现」搜索 Touchline Football，核对作者 `KhalilWong` 和版本 `1.0.0` 后安装。市场更新取决于索引同步；若仍显示旧版本，可使用上面的 GitHub Release 安装。内部包名为 `dsh-plugin-touchline`，已有配置可沿用。[npm 1.0.0](https://www.npmjs.com/package/dsh-plugin-touchline/v/1.0.0) · [收录申请](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/16580)
+已于 2026-11-25 在真实 DSH 完成上述市场安装、启用及直播/回放切换，见[正式发布验收](docs/acceptance-1.0.0.md)。若市场无法读取或仍显示旧版本，可刷新索引，或从 [Release](https://github.com/KhalilWong/dsh-plugin-touchline-football/releases/tag/v1.0.0) 下载 **`dsh-plugin-touchline-1.0.0.tgz`**，在「插件 → 添加插件 → 安装第三方插件」输入文件绝对路径安装。GitHub 自动生成的 Source code 归档用于开发。内部包名为 `dsh-plugin-touchline`，已有配置可沿用。[npm 1.0.0](https://www.npmjs.com/package/dsh-plugin-touchline/v/1.0.0) · [收录申请](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/16580)
 
 ## 没有直播时如何体验
 
