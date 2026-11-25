@@ -82,4 +82,4 @@ npm run release:prepare # 生成安装包、源码归档、清单与校验文件
 
 代码采用 [MIT](LICENSE) 许可。第三方赛事数据适用其自身条款，不在 MIT 授权范围内。发布包不含赛事数据、下载样本或队徽文件。发布流程见[发布指南](docs/releasing.md)。
 
-HTTP 路由使用宿主认证并限制为 owner；旧宿主通过 `connection.admit()` 检查。缺少可验证身份时拒绝访问。
+HTTP 路由使用宿主认证并限制为 owner；旧宿主通过 `connection.admit()` 检查。缺少可验证身份时拒绝访问。公开包校验、访问控制和市场同步进度见 [1.0.0 发布验收](docs/acceptance-1.0.0.md)。
